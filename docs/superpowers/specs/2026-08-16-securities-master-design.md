@@ -294,8 +294,8 @@ a comprehension checkpoint.
 | Phase | Content | Done when |
 |---|---|---|
 | 0 | Repo, `uv`, Docker Compose Postgres, Alembic, pytest | One command yields a running, migrated, empty database |
-| 1 | Identity core; SEC EDGAR seed | `resolve()` works; DB provably rejects overlapping ranges |
-| 2 | Calendar, landing schema, yfinance adapter, normalization (~100 names) | Real bars in `core`; gaps distinguishable from holidays |
+| 1 | Landing schema; identity core; SEC EDGAR seed | `resolve()` works; DB provably rejects overlapping ranges |
+| 2 | Calendar, yfinance adapter, bar normalization (~100 names) | Real bars in `core`; gaps distinguishable from holidays |
 | 3 | Corporate actions; adjustment engine | Golden tests pass on hand-verified numbers |
 | 4 | Form 25 delistings; PIT universe; coverage measurement | Lehman test passes; coverage reported |
 | 5 | Full-universe backfill; rate limiting, retry, idempotency | Full DB populated; re-run is a no-op |

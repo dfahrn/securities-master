@@ -1,9 +1,16 @@
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import Connection, select
 
 from securities_master.core.tables import security, security_identifier
 from securities_master.landing.tables import edgar_company_tickers
+
+
+@dataclass(frozen=True)
+class NormalizeResult:
+    created: int
+    skipped_duplicate_cik: int
 
 
 def _existing_ciks(conn: Connection) -> set[str]:
@@ -20,11 +27,19 @@ def _existing_ciks(conn: Connection) -> set[str]:
 
 def normalize_company_tickers(
     conn: Connection, landing_id: int, as_of: date
-) -> int:
+) -> NormalizeResult:
     """Derive core.security and core.security_identifier from a landing row.
 
     CIK is the anchor identifier: SEC-assigned, permanent, never recycled.
     A company already known by CIK is skipped, which makes this idempotent.
+
+    CIK identifies an issuer, not a security (e.g. Alphabet files under one
+    CIK for both GOOGL and GOOG), and the EXCLUDE constraint on
+    security_identifier forbids two securities sharing a CIK. Create-or-skip
+    is therefore the only strategy this schema permits until Phase 2 adds an
+    issuer table; rows beyond the first for a given CIK are counted in
+    `skipped_duplicate_cik` rather than silently dropped, per the project's
+    coverage-reporting principle.
 
     Known approximation: company_tickers.json is a snapshot with no history,
     so identifier ranges open at `as_of`. Phase 4 backfills earlier ranges
@@ -38,10 +53,12 @@ def normalize_company_tickers(
 
     known = _existing_ciks(conn)
     created = 0
+    skipped_duplicate_cik = 0
 
     for row in payload.values():
         cik = f"{int(row['cik_str']):010d}"
         if cik in known:
+            skipped_duplicate_cik += 1
             continue
 
         security_id = conn.execute(
@@ -76,4 +93,4 @@ def normalize_company_tickers(
         known.add(cik)
         created += 1
 
-    return created
+    return NormalizeResult(created=created, skipped_duplicate_cik=skipped_duplicate_cik)

@@ -1,4 +1,13 @@
-from sqlalchemy import BigInteger, Column, Date, Identity, MetaData, Table, Text
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Date,
+    ForeignKey,
+    Identity,
+    MetaData,
+    Table,
+    Text,
+)
 
 metadata = MetaData()
 
@@ -22,5 +31,24 @@ security = Table(
     Column("security_type", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("first_seen_date", Date, nullable=False),
+    schema="core",
+)
+
+IDENTIFIER_TYPES = ("ticker", "cusip", "isin", "figi", "cik")
+
+security_identifier = Table(
+    "security_identifier",
+    metadata,
+    Column("security_identifier_id", BigInteger, Identity(), primary_key=True),
+    Column(
+        "security_id",
+        BigInteger,
+        ForeignKey("core.security.security_id"),
+        nullable=False,
+    ),
+    Column("id_type", Text, nullable=False),
+    Column("id_value", Text, nullable=False),
+    Column("valid_from", Date, nullable=False),
+    Column("valid_to", Date, nullable=True),
     schema="core",
 )

@@ -46,7 +46,7 @@ described as finished.
 | Seeded ticker ranges use `valid_from = fetch date`; earlier history unknown, so `resolve()` returns `None` for past dates | Task 9 | Phase 4 (EDGAR former-names + Form 25 backfill) |
 | Only currently-listed companies are seeded; `company_tickers.json` omits defunct filers | Task 9 | Phase 4 |
 | Every seeded row gets `security_type = 'common_stock'`; `company_tickers.json` carries no instrument-type field, so ETFs and ADRs are mislabelled | Task 9 | Phase 2 |
-| One security per CIK. CIK identifies an *issuer*, not a security, so a company with multiple share classes (GOOGL/GOOG, BRK-A/BRK-B) keeps only its first ticker. The schema cannot represent the alternative until an `issuer` table exists. Count is reported as `skipped_duplicate_cik`, never silent | Task 9 | Phase 2 |
+| One security per CIK. CIK identifies an *issuer*, not a security, so a company with multiple share classes (GOOGL/GOOG, BRK-A/BRK-B) keeps only its first ticker. The schema cannot represent the alternative until an `issuer` table exists. Count is reported as `skipped_duplicate_cik`, never silent. **Measured on the real file: 10,396 payload entries → 7,995 distinct CIKs → 2,401 tickers unrepresented (23%).** Far larger than the "several hundred" first estimated; this makes the `issuer` table the highest-priority item in Phase 2, not a cleanup | Task 9 | Phase 2 |
 | A ticker reassigned to a different CIK raises `IntegrityError` against the exclusion constraint, and a ticker change on an unchanged CIK leaves the stale ticker open-ended. Both need range close-out logic. Pinned by a test asserting current behaviour | Task 9 | Phase 4 |
 | `core.exchange` seeded with three MICs only | Task 3 | Phase 2 |
 

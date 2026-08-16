@@ -140,6 +140,35 @@ def test_different_id_types_do_not_collide(conn):
     )
 
 
+def test_different_id_values_do_not_collide(conn):
+    """Two tickers may of course be active on the same day.
+
+    Guards the other half of the exclusion key: a constraint omitting
+    `id_value WITH =` passes every other test in this file, yet would
+    permit only one ticker in the entire database at a time.
+    """
+    a = _make_security(conn)
+    b = _make_security(conn)
+    conn.execute(
+        security_identifier.insert().values(
+            security_id=a,
+            id_type="ticker",
+            id_value="AAPL",
+            valid_from=date(2005, 1, 1),
+            valid_to=None,
+        )
+    )
+    conn.execute(
+        security_identifier.insert().values(
+            security_id=b,
+            id_type="ticker",
+            id_value="MSFT",
+            valid_from=date(2005, 1, 1),
+            valid_to=None,
+        )
+    )
+
+
 def test_rejects_unknown_id_type(conn):
     a = _make_security(conn)
     with pytest.raises(IntegrityError):

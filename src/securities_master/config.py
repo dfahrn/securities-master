@@ -1,8 +1,6 @@
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
 
 @dataclass(frozen=True)
 class Settings:
@@ -11,7 +9,6 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        load_dotenv()
         database_url = os.environ.get("DATABASE_URL")
         if not database_url:
             raise RuntimeError(

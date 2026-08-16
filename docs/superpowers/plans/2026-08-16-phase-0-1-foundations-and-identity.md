@@ -45,6 +45,7 @@ described as finished.
 |---|---|---|
 | Seeded ticker ranges use `valid_from = fetch date`; earlier history unknown, so `resolve()` returns `None` for past dates | Task 9 | Phase 4 (EDGAR former-names + Form 25 backfill) |
 | Only currently-listed companies are seeded; `company_tickers.json` omits defunct filers | Task 9 | Phase 4 |
+| Every seeded row gets `security_type = 'common_stock'`; `company_tickers.json` carries no instrument-type field, so ETFs and ADRs are mislabelled | Task 9 | Phase 2 |
 | `core.exchange` seeded with three MICs only | Task 3 | Phase 2 |
 
 ---

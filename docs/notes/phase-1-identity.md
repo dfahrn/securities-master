@@ -154,6 +154,26 @@ into the first security. That counter is a coverage-honesty mechanism (the
 project's principle P6), not a bug — it's a deliberate, measured gap that
 an `issuer` table in Phase 2 is expected to close.
 
+"First seen" deserves emphasis, because it means the surviving share class
+is **arbitrary**. It is whichever one `company_tickers.json` happened to
+list first — not the primary listing, not the more liquid class, not the one
+with voting rights. Verified against the live seed: Berkshire Hathaway kept
+`BRK-B` and dropped `BRK-A`, purely on file order. So the 77% of tickers
+this database does hold is not "the main listing of each issuer"; it is a
+per-issuer coin flip decided by the vendor's serialization order, and any
+downstream analysis that treats the retained class as canonical is reading
+something into the data that was never there.
+
+The skip branch also splits its counting, because two different things land
+in it. A row whose CIK is known *and* whose issuer's recorded ticker is still
+present in the payload is a share class this schema cannot represent —
+`skipped_duplicate_cik`. A row whose CIK is known but whose issuer's recorded
+ticker has disappeared from the payload is a **rename** that was not applied:
+the new ticker is never created and the old row stays open-ended, so
+`resolve()` is wrong about today, not just about the past. That case is
+counted separately as `skipped_cik_ticker_changed` so the two gaps can be
+measured apart rather than hidden inside one number.
+
 ## Why landing is separate from core
 
 `landing.edgar_company_tickers` stores the raw JSON payload SEC returns,
@@ -173,6 +193,14 @@ history. Keeping the raw payload means a normalization fix can be replayed
 straight from what's already on disk in Postgres — `normalize_company_tickers()`
 takes a `landing_id`, not a network call.
 
+For that replay to be a *reproduction* rather than a rebuild, the normalizer
+must not read the wall clock. Its `as_of` therefore defaults to the landing
+row's own `fetched_at` date, so re-deriving landing row 1 a year from now
+writes the same `valid_from` and `first_seen_date` it wrote originally. If
+`as_of` came from `date.today()`, `core` would be a function of the payload
+*and* the moment you happened to rerun the job, and a Phase 4 backfill would
+quietly rewrite every seeded range to the backfill date.
+
 It also means idempotency can be judged honestly at two different layers.
 `land_company_tickers()` is idempotent by payload hash: if SEC republishes
 the exact same file, nothing new lands. `normalize_company_tickers()` is
@@ -185,9 +213,10 @@ other, because they operate on different schemas with different guarantees.
 
 The Approximation Ledger is a running list of known gaps between what this
 phase claims and what it actually delivers, each with the phase expected to
-close it. Most entries bear on what `resolve()` can honestly promise about
-the past, as opposed to today. One does not — it affects `resolve()` right
-now, on current data, and is the only entry with a hard number attached:
+close it. Two of the entries below are date gaps: they bound what `resolve()`
+can honestly promise about the past, as opposed to today. The rest are not
+date gaps at all, and one of those — the largest, and the only entry with a
+hard number attached — affects `resolve()` right now, on current data:
 
 - **Seeded ranges start at fetch date, not at reality.** `company_tickers.json`
   is a snapshot with no history attached — it just says "this ticker
@@ -218,9 +247,10 @@ now, on current data, and is the only entry with a hard number attached:
   into their own security. This is the `skipped_duplicate_cik` count
   discussed above under "Why CIK anchors identity instead of ticker": CIK
   identifies an issuer, not a security, and until an `issuer` table exists,
-  only the first ticker seen for a CIK becomes a `security` row. Every
-  other entry in this ledger is a *historical* gap — `resolve()` is wrong
-  only about dates in the past, and correct about today. This one is not:
+  only the first ticker seen for a CIK becomes a `security` row. The other
+  date-related entries in this ledger are *historical* gaps — there
+  `resolve()` is wrong only about dates in the past, and correct about
+  today. This one is not:
   `resolve(conn, "GOOG", date.today())` returns `None` right now, on
   current data, because Alphabet's CIK was already claimed by `GOOGL` when
   `GOOG` was seeded and skipped as a duplicate. A reader could otherwise
@@ -238,7 +268,17 @@ now, on current data, and is the only entry with a hard number attached:
   stale ticker row open-ended with no `valid_to`. Range close-out logic —
   actively detecting "this ticker used to point here, now it points
   elsewhere, close the old row" — doesn't exist yet. Phase 4 closes this
-  too.
+  too. The second variant is the quiet one: it raises nothing, and
+  `resolve()` is wrong about today (the old ticker still resolves, the new
+  one does not), which is why it is counted as `skipped_cik_ticker_changed`
+  and pinned by a test rather than left to be discovered downstream.
+
+- **A row with an unusable ticker yields a security with no ticker.** A
+  blank or whitespace-only ticker in the payload is skipped and counted as
+  `skipped_blank_ticker`, but the `security` and its `cik` identifier are
+  still created — losing the issuer entirely would be the worse trade. Such
+  a security is unreachable by `resolve()` until a later payload supplies a
+  usable symbol, which again needs the Phase 4 close-out logic.
 
 The unifying theme, and the answer to why this matters for `resolve()`
 specifically: **the system is designed to fail closed.** Returning `None`

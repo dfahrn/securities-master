@@ -22,10 +22,15 @@ def seed_edgar() -> None:
         if landing_id is None:
             print("EDGAR payload unchanged; nothing landed.")
             return
-        result = normalize_company_tickers(conn, landing_id, as_of=now.date())
+        # No `as_of`: it defaults to the landing row's `fetched_at` date, so a
+        # replay of this landing row reproduces these rows rather than
+        # rebuilding them with a fresh wall-clock date.
+        result = normalize_company_tickers(conn, landing_id)
         print(
             f"Landed row {landing_id}; created {result.created} securities; "
-            f"skipped {result.skipped_duplicate_cik} duplicate-CIK share classes."
+            f"skipped {result.skipped_duplicate_cik} duplicate-CIK share classes; "
+            f"skipped {result.skipped_cik_ticker_changed} changed tickers on a "
+            f"known CIK; skipped {result.skipped_blank_ticker} blank tickers."
         )
 
 

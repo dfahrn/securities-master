@@ -195,3 +195,24 @@ def test_rejects_inverted_range(conn):
                 valid_to=date(2005, 1, 1),
             )
         )
+
+
+def test_rejects_zero_length_range(conn):
+    """Pins `valid_to > valid_from` against a flip to `>=`.
+
+    The inverted-range test above fails under both operators, so it does not
+    pin the boundary. A row with valid_to == valid_from spans no days at all:
+    it is invisible to `resolve()` on every date and, being an empty range,
+    invisible to the exclusion constraint too.
+    """
+    a = _make_security(conn)
+    with pytest.raises(IntegrityError, match="identifier_range_valid"):
+        conn.execute(
+            security_identifier.insert().values(
+                security_id=a,
+                id_type="ticker",
+                id_value="XYZ",
+                valid_from=date(2005, 1, 1),
+                valid_to=date(2005, 1, 1),
+            )
+        )

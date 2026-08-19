@@ -130,7 +130,7 @@ exchange string:
 |---|---|
 | `Nasdaq` | `XNAS` |
 | `NYSE` | `XNYS` |
-| `CBOE` | `BATS` |
+| `CBOE` | `BATS` (Cboe BZX Exchange; the file's generic `CBOE` gives no finer venue) |
 | `OTC`, null | *(row excluded, counted)* |
 
 `valid_from` is the landing row's `fetched_at` date; `valid_to` is NULL;
@@ -183,6 +183,10 @@ Per row of `company_tickers_exchange.json`:
 1. Skip and count rows whose exchange is `OTC` or null (D4).
 2. Upsert `issuer` by CIK, taking `name` from the file and `entity_type` /
    `sic_code` / `sic_description` from that CIK's landed submissions payload.
+   When no submissions payload exists for that CIK — the fetch failed and was
+   counted per §6 — the three SEC-derived columns are left NULL and the
+   security's `security_type` becomes `unknown`. A missing fact is recorded as
+   missing, never guessed from the name.
 3. Insert one `security` per row, linked to the issuer.
 4. Insert its `ticker` identifier, `valid_from = fetched_at.date()`.
 5. Insert its `security_listing` row with the mapped MIC.
@@ -190,8 +194,13 @@ Per row of `company_tickers_exchange.json`:
 `security_type` is `common_stock` when `entity_type == 'operating'`, otherwise
 `unknown` (D3).
 
-**Expected outcome:** ~7,687 securities across ~7,998 issuers, with ~2,711 rows
-excluded and reported. The security count falls from Phase 1's 7,995 while the
+An `issuer` row is created only for a CIK with at least one included security.
+A filer appearing solely on excluded OTC or null-exchange rows produces no
+issuer, so the issuer count is strictly below the file's 7,998 distinct CIKs;
+the exact figure is whatever the run reports and is not predicted here.
+
+**Expected outcome:** ~7,687 securities, fewer than 7,998 issuers, with 2,711
+rows excluded and reported. The security count falls from Phase 1's 7,995 while the
 model becomes more correct — share classes are now represented and OTC shells
 are not. That direction of movement must be stated in the run output, not
 discovered later.

@@ -4,7 +4,7 @@ from sqlalchemy import Connection, select
 
 from securities_master.ingest.base import payload_hash
 from securities_master.ingest.edgar import EdgarAdapter
-from securities_master.landing.tables import edgar_company_tickers
+from securities_master.landing.tables import edgar_company_tickers, edgar_company_tickers_exchange
 
 
 def land_company_tickers(
@@ -30,4 +30,31 @@ def land_company_tickers(
         edgar_company_tickers.insert()
         .values(fetched_at=now, payload_hash=digest, payload=payload)
         .returning(edgar_company_tickers.c.landing_id)
+    ).scalar_one()
+
+
+def land_company_tickers_exchange(
+    conn: Connection, adapter: EdgarAdapter, now: datetime
+) -> int | None:
+    """Store the raw exchange-bearing ticker payload.
+
+    Returns None when this exact payload is already landed. Idempotency is by
+    content hash, never by timestamp: re-running against an unchanged upstream
+    file must not create a second landing row.
+    """
+    payload = adapter.fetch_company_tickers_exchange_payload()
+    digest = payload_hash(payload)
+
+    existing = conn.execute(
+        select(edgar_company_tickers_exchange.c.landing_id).where(
+            edgar_company_tickers_exchange.c.payload_hash == digest
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return None
+
+    return conn.execute(
+        edgar_company_tickers_exchange.insert()
+        .values(fetched_at=now, payload_hash=digest, payload=payload)
+        .returning(edgar_company_tickers_exchange.c.landing_id)
     ).scalar_one()

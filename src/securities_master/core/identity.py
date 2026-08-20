@@ -1,8 +1,9 @@
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import Connection, or_, select
 
-from securities_master.core.tables import security_identifier
+from securities_master.core.tables import issuer, security, security_identifier
 
 
 def _valid_on(as_of: date):
@@ -61,3 +62,38 @@ def identifiers_for(
             )
         identifiers[row.id_type] = row.id_value
     return identifiers
+
+
+@dataclass(frozen=True)
+class Issuer:
+    issuer_id: int
+    cik: str
+    name: str
+    entity_type: str | None
+    sic_code: str | None
+    sic_description: str | None
+
+
+def issuer_for(conn: Connection, security_id: int) -> Issuer:
+    """The issuer that owns a security.
+
+    CIK identifies an issuer, not a security: Alphabet is one filer with two
+    securities. This is the lookup that answers 'what else does this filer
+    issue?' — the question Phase 1's 23% gap was really about.
+    """
+    stmt = (
+        select(
+            issuer.c.issuer_id,
+            issuer.c.cik,
+            issuer.c.name,
+            issuer.c.entity_type,
+            issuer.c.sic_code,
+            issuer.c.sic_description,
+        )
+        .select_from(security.join(issuer, security.c.issuer_id == issuer.c.issuer_id))
+        .where(security.c.security_id == security_id)
+    )
+    row = conn.execute(stmt).one_or_none()
+    if row is None:
+        raise LookupError(f"no security with security_id {security_id}")
+    return Issuer(*row)

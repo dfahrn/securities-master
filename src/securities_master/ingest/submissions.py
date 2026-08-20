@@ -71,13 +71,23 @@ def land_submissions(
     requests_per_second: float = 8.0,
     max_attempts: int = 4,
     sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> SubmissionsRunResult:
     """Fetch and land one submissions payload per CIK.
 
     Rate limited to `requests_per_second` against SEC's stated limit of 10 —
-    headroom rather than optimism. A CIK that fails outright, or that
-    exhausts its retries, is recorded and counted, never fatal — one bad
-    filer or one malformed response cannot cost 8,000 good fetches.
+    headroom rather than optimism. Pacing is deadline-based, not
+    sleep-after-work: sleeping a fixed `interval` once the fetch and its DB
+    round trip are done makes the achieved period `interval + latency`, which
+    is how a nominal 8 req/s ran at a measured 3.2 (41 minutes against a
+    17-minute estimate). Advancing a deadline by `interval` and sleeping only
+    the remainder holds the nominal rate without ever exceeding it: a missed
+    deadline resets to the current time instead of accumulating credit that
+    would later be spent as a burst of unpaced requests.
+
+    A CIK that fails outright, or that exhausts its retries, is recorded and
+    counted, never fatal — one bad filer or one malformed response cannot
+    cost 8,000 good fetches.
 
     Resumability is scoped to rows this run actually inserted, not to CIKs
     it merely observed. A killed run restarts and skips every CIK whose
@@ -97,6 +107,23 @@ def land_submissions(
     """
     done = _landed_this_run(conn, run_started)
     interval = 1.0 / requests_per_second
+    next_at = monotonic()
+
+    def pace() -> None:
+        """Hold the deadline for the next request, then sleep to reach it."""
+        nonlocal next_at
+        next_at += interval
+        now = monotonic()
+        delay = next_at - now
+        if delay > 0:
+            sleep(delay)
+        else:
+            # Behind schedule (a slow fetch, or a retry backoff). Reset the
+            # deadline to now rather than carrying the debt forward: an
+            # accumulated deficit would be repaid as a burst of unpaced
+            # requests the moment upstream sped up, which is exactly the
+            # limit-exceeding behaviour the pacing exists to prevent.
+            next_at = now
 
     landed = unchanged = skipped = failed = 0
     failures: list[str] = []
@@ -117,7 +144,7 @@ def land_submissions(
             # not Exception, so they still propagate.
             failed += 1
             failures.append(cik)
-            sleep(interval)
+            pace()
             continue
 
         digest = payload_hash(payload)
@@ -142,7 +169,7 @@ def land_submissions(
             unchanged += 1
 
         done.add(cik)
-        sleep(interval)
+        pace()
 
     return SubmissionsRunResult(
         landed=landed,

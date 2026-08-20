@@ -44,7 +44,11 @@ def main() -> None:
     print(f"distinct CIKs to fetch: {len(ciks)}")
 
     # Chunked so each batch COMMITS. One transaction spanning ~8,000 network
-    # calls would hold a write transaction open for 17 minutes and — worse —
+    # calls would hold a write transaction open for tens of minutes — the one
+    # real run measured 41, against a 17-minute estimate, because sleeping
+    # AFTER each fetch made the period `interval + latency` rather than
+    # `interval`; deadline-based pacing now holds the nominal rate — and,
+    # worse —
     # make the loop's resumability useless, because a crash would roll back
     # every fetch and the run-scoped skip would find nothing to skip.
     CHUNK = 200

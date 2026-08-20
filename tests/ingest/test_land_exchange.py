@@ -56,3 +56,10 @@ def test_a_changed_payload_lands_a_second_row(conn):
     land_company_tickers_exchange(conn, _adapter(), now=NOW)
     second = land_company_tickers_exchange(conn, _adapter(changed), now=NOW)
     assert second is not None
+    # Pins the count the way its sibling's `total == 1` pins the other
+    # direction: `is not None` alone would also pass if the second call had
+    # somehow returned an id without inserting a row.
+    total = conn.execute(
+        select(func.count()).select_from(edgar_company_tickers_exchange)
+    ).scalar_one()
+    assert total == 2

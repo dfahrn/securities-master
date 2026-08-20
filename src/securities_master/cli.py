@@ -38,13 +38,17 @@ def seed_phase2a() -> None:
         disagreements = ticker_disagreements(conn, landing_id)
 
     print(f"Normalized landing row {landing_id}:")
-    print(f"  issuers created           {result.issuers_created}")
-    print(f"  securities created        {result.securities_created}")
-    print(f"  excluded (OTC)            {result.excluded_otc}")
-    print(f"  excluded (no venue)       {result.excluded_no_exchange}")
-    print(f"  excluded (unknown venue)  {result.excluded_unknown_venue}")
-    print(f"  skipped (blank ticker)    {result.skipped_blank_ticker}")
-    print(f"  issuers missing SEC facts {result.missing_submissions}")
+    for label, count in (
+        ("issuers created", result.issuers_created),
+        ("securities created", result.securities_created),
+        ("excluded (OTC)", result.excluded_otc),
+        ("excluded (no venue)", result.excluded_no_exchange),
+        ("excluded (unknown venue)", result.excluded_unknown_venue),
+        ("skipped (blank ticker)", result.skipped_blank_ticker),
+        ("skipped (duplicate ticker)", result.skipped_duplicate_ticker),
+        ("issuers missing SEC facts", result.missing_submissions),
+    ):
+        print(f"  {label:<26} {count}")
     print(f"  CIKs where SEC's two sources disagree: {len(disagreements)}")
 
 

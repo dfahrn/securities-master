@@ -21,20 +21,38 @@ exchange = Table(
     schema="core",
 )
 
-SECURITY_TYPES = ("common_stock", "etf", "adr")
+SECURITY_TYPES = ("common_stock", "etf", "adr", "unknown")
 SECURITY_STATUSES = ("active", "delisted")
+
+issuer = Table(
+    "issuer",
+    metadata,
+    Column("issuer_id", BigInteger, Identity(), primary_key=True),
+    Column("cik", Text, nullable=False, unique=True),
+    Column("name", Text, nullable=False),
+    Column("entity_type", Text, nullable=True),
+    Column("sic_code", Text, nullable=True),
+    Column("sic_description", Text, nullable=True),
+    schema="core",
+)
 
 security = Table(
     "security",
     metadata,
     Column("security_id", BigInteger, Identity(), primary_key=True),
+    Column(
+        "issuer_id",
+        BigInteger,
+        ForeignKey("core.issuer.issuer_id"),
+        nullable=False,
+    ),
     Column("security_type", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("first_seen_date", Date, nullable=False),
     schema="core",
 )
 
-IDENTIFIER_TYPES = ("ticker", "cusip", "isin", "figi", "cik")
+IDENTIFIER_TYPES = ("ticker", "cusip", "isin", "figi")
 
 security_identifier = Table(
     "security_identifier",

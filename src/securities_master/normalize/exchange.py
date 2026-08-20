@@ -22,6 +22,7 @@ class ExchangeNormalizeResult:
     excluded_no_exchange: int
     excluded_unknown_venue: int
     skipped_blank_ticker: int
+    skipped_duplicate_ticker: int
     missing_submissions: int
 
 
@@ -62,6 +63,43 @@ def _submissions_facts(conn: Connection) -> dict[str, tuple]:
     }
 
 
+def _included(row: list) -> bool:
+    """Whether a payload row survives the venue filters.
+
+    Shared by the duplicate pre-scan and the main loop so the two can never
+    disagree about which rows compete for a ticker.
+    """
+    venue = row[3]
+    return venue is not None and venue != "OTC" and venue in EXCHANGE_MIC
+
+
+def _duplicate_tickers(payload: dict) -> set[str]:
+    """Tickers claimed by more than one INCLUDED row.
+
+    One repeated ticker in the vendor file would otherwise hit the
+    `security_identifier_no_overlap` exclusion constraint mid-loop, abort
+    the whole transaction, and leave `core` empty behind a raw driver
+    error — a 7,696-row rebuild lost to one upstream glitch. Scanning
+    included rows only is deliberate: a ticker shared with an OTC or
+    venueless row never reaches `core`, so it is not a collision.
+
+    Blank tickers are not scanned: they are handled by the blank-ticker
+    path, which writes no identifier and therefore cannot collide.
+    """
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for row in payload["data"]:
+        if not _included(row):
+            continue
+        ticker = _clean_ticker(row[2])
+        if not ticker:
+            continue
+        if ticker in seen:
+            duplicates.add(ticker)
+        seen.add(ticker)
+    return duplicates
+
+
 def normalize_company_tickers_exchange(
     conn: Connection, landing_id: int, as_of: date | None = None
 ) -> ExchangeNormalizeResult:
@@ -80,6 +118,15 @@ def normalize_company_tickers_exchange(
     solely on excluded rows produces nothing. When a CIK has no landed
     submissions payload the SEC-derived columns stay NULL and the security's
     type is `unknown` — a missing fact is recorded as missing, never guessed.
+
+    A ticker claimed by more than one included row is dropped and counted
+    rather than inserted: one repeated ticker would otherwise abort the whole
+    transaction on the identifier exclusion constraint.
+
+    REBUILD ONLY. There is no incremental path: this function always inserts,
+    so running it against a populated `core` raises `UniqueViolation` on
+    `issuer.cik`. A re-seed must truncate first. Incremental normalization is
+    Phase 2b's job.
     """
     payload, fetched_at = conn.execute(
         select(
@@ -91,10 +138,11 @@ def normalize_company_tickers_exchange(
         as_of = fetched_at.date()
 
     facts = _submissions_facts(conn)
+    duplicates = _duplicate_tickers(payload)
 
     issuers_created = securities_created = 0
     excluded_otc = excluded_no_exchange = excluded_unknown_venue = 0
-    skipped_blank_ticker = 0
+    skipped_blank_ticker = skipped_duplicate_ticker = 0
     missing_ciks: set[str] = set()
     issuer_ids: dict[str, int] = {}
 
@@ -110,6 +158,14 @@ def normalize_company_tickers_exchange(
             continue
         if venue not in EXCHANGE_MIC:
             excluded_unknown_venue += 1
+            continue
+
+        ticker = _clean_ticker(raw_ticker)
+        if ticker in duplicates:
+            # Counted per skipped ROW, so a ticker claimed twice contributes
+            # 2. Neither claimant is written: with no way to tell which
+            # filer owns it, guessing one is worse than reporting the gap.
+            skipped_duplicate_ticker += 1
             continue
 
         if cik not in issuer_ids:
@@ -144,7 +200,6 @@ def normalize_company_tickers_exchange(
         ).scalar_one()
         securities_created += 1
 
-        ticker = _clean_ticker(raw_ticker)
         if ticker:
             conn.execute(
                 security_identifier.insert().values(
@@ -177,5 +232,6 @@ def normalize_company_tickers_exchange(
         excluded_no_exchange=excluded_no_exchange,
         excluded_unknown_venue=excluded_unknown_venue,
         skipped_blank_ticker=skipped_blank_ticker,
+        skipped_duplicate_ticker=skipped_duplicate_ticker,
         missing_submissions=len(missing_ciks),
     )

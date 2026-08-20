@@ -23,6 +23,24 @@ def test_fetch_exchange_payload_returns_the_raw_dict():
     assert adapter.fetch_company_tickers_exchange_payload() == EXCHANGE_SAMPLE
 
 
+def test_fetch_exchange_builds_the_url():
+    """Pins the URL the way the submissions test pins its own.
+
+    Unpinned, a typo or a swap to `company_tickers.json` (a real file, with
+    a different shape and no exchange column) fetches successfully and is
+    caught only by whatever downstream test happens to notice the missing
+    venue — or by nothing at all.
+    """
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=EXCHANGE_SAMPLE)
+
+    _adapter(handler).fetch_company_tickers_exchange_payload()
+    assert seen["url"] == "https://www.sec.gov/files/company_tickers_exchange.json"
+
+
 def test_fetch_submissions_builds_the_padded_url():
     seen = {}
 

@@ -13,7 +13,10 @@ from securities_master.landing.tables import (
     edgar_company_tickers_exchange,
     edgar_submissions,
 )
-from securities_master.normalize.exchange import normalize_company_tickers_exchange
+from securities_master.normalize.exchange import (
+    ExchangeNormalizeResult,
+    normalize_company_tickers_exchange,
+)
 
 FETCHED = datetime(2020, 3, 1, 14, 30, tzinfo=timezone.utc)
 FETCHED_DATE = date(2020, 3, 1)
@@ -158,17 +161,34 @@ def test_empty_sic_is_stored_as_null(conn):
 
 
 def test_listings_carry_the_mapped_mic(conn):
+    """Every venue in EXCHANGE_MIC, pinned by one whole-collection equality.
+
+    Asserting a subset is what let `NYSE -> XNYS` ship unpinned: SPY is the
+    only NYSE row in the fixture, so flipping that mapping to `XNAS` left
+    the suite green while 43% of real securities got the wrong venue. Both
+    wrong values are valid FK targets, so nothing else would catch it.
+    """
     _land_submissions(conn, ALL_FACTS)
     normalize_company_tickers_exchange(conn, _land(conn))
-    apple = resolve(conn, "AAPL", FETCHED_DATE)
-    cboe = resolve(conn, "CBOEX", FETCHED_DATE)
     mics = dict(
         conn.execute(
-            select(security_listing.c.security_id, security_listing.c.exchange_mic)
+            select(security_identifier.c.id_value, security_listing.c.exchange_mic)
+            .select_from(
+                security_listing.join(
+                    security_identifier,
+                    security_listing.c.security_id
+                    == security_identifier.c.security_id,
+                )
+            )
         ).all()
     )
-    assert mics[apple] == "XNAS"
-    assert mics[cboe] == "BATS"
+    assert mics == {
+        "AAPL": "XNAS",
+        "GOOGL": "XNAS",
+        "GOOG": "XNAS",
+        "SPY": "XNYS",
+        "CBOEX": "BATS",
+    }
 
 
 def test_listing_ranges_open_at_the_landing_fetch_date(conn):
@@ -193,27 +213,69 @@ def test_a_blank_ticker_keeps_the_security_and_is_counted(conn):
     assert tickers == 0
 
 
+def _core_projection(conn):
+    """Every derived fact in `core`, as one deterministically ordered list.
+
+    Deliberately spans all four tables: comparing one zero-variance column
+    (every row's `first_seen_date` is the same constant) cannot tell a
+    correct rebuild from an empty one with the right dates. Deleting the
+    issuer-facts join, the MIC mapping, or every ticker write must move
+    this projection.
+    """
+    return conn.execute(
+        select(
+            issuer.c.cik,
+            issuer.c.name,
+            issuer.c.entity_type,
+            issuer.c.sic_code,
+            security.c.security_type,
+            security_identifier.c.id_value,
+            security_listing.c.exchange_mic,
+            security_listing.c.valid_from,
+        )
+        .select_from(
+            issuer.join(security, security.c.issuer_id == issuer.c.issuer_id)
+            .outerjoin(
+                security_identifier,
+                security_identifier.c.security_id == security.c.security_id,
+            )
+            .outerjoin(
+                security_listing,
+                security_listing.c.security_id == security.c.security_id,
+            )
+        )
+        .order_by(issuer.c.cik, security_identifier.c.id_value)
+    ).all()
+
+
 def test_normalize_replays_identically_from_landing(conn):
     """P4: a rebuild reproduces, it does not merely rebuild."""
     _land_submissions(conn, ALL_FACTS)
     landing_id = _land(conn)
     normalize_company_tickers_exchange(conn, landing_id)
-    before = conn.execute(
-        select(security.c.first_seen_date).order_by(security.c.security_id)
-    ).scalars().all()
-    assert before == [FETCHED_DATE] * 5
+    before = _core_projection(conn)
+    assert before == [
+        ("0000000111", "Cboe Listed Co", "operating", "6199",
+         "common_stock", "CBOEX", "BATS", FETCHED_DATE),
+        ("0000320193", "Apple Inc.", "operating", "3571",
+         "common_stock", "AAPL", "XNAS", FETCHED_DATE),
+        ("0000884394", "SPDR S&P 500 ETF TRUST", "other", None,
+         "unknown", "SPY", "XNYS", FETCHED_DATE),
+        ("0001652044", "Alphabet Inc.", "operating", "7370",
+         "common_stock", "GOOG", "XNAS", FETCHED_DATE),
+        ("0001652044", "Alphabet Inc.", "operating", "7370",
+         "common_stock", "GOOGL", "XNAS", FETCHED_DATE),
+    ]
     assert FETCHED_DATE != date.today()
 
     conn.execute(security_listing.delete())
     conn.execute(security_identifier.delete())
     conn.execute(security.delete())
     conn.execute(issuer.delete())
+    assert _core_projection(conn) == []
 
     normalize_company_tickers_exchange(conn, landing_id)
-    after = conn.execute(
-        select(security.c.first_seen_date).order_by(security.c.security_id)
-    ).scalars().all()
-    assert after == before
+    assert _core_projection(conn) == before
 
 
 def test_explicit_as_of_overrides_the_landing_fetch_date(conn):
@@ -222,3 +284,63 @@ def test_explicit_as_of_overrides_the_landing_fetch_date(conn):
     normalize_company_tickers_exchange(conn, _land(conn), as_of=override)
     seen = conn.execute(select(security.c.first_seen_date)).scalars().first()
     assert seen == override
+
+
+def test_a_duplicate_ticker_is_excluded_and_counted(conn):
+    """One repeated ticker must cost two rows, never the whole rebuild.
+
+    Without the pre-scan the second claimant hits
+    `security_identifier_no_overlap` mid-loop, aborts the transaction, and
+    leaves `core` empty behind a raw driver error — 7,696 good rows lost to
+    one vendor-file glitch. Neither claimant is written, because nothing in
+    the file says which filer owns the ticker.
+
+    Asserts the whole result object: a new counter that only ever appears in
+    a single-field assertion is a counter whose siblings are unpinned.
+    """
+    _land_submissions(conn, {320193: ALL_FACTS[320193], 111: ALL_FACTS[111]})
+    landing_id = _land(
+        conn,
+        [
+            [320193, "Apple Inc.", "AAPL", "Nasdaq"],
+            [111, "Impostor Co", "AAPL", "NYSE"],
+            [111, "Impostor Co", "IMPO", "NYSE"],
+        ],
+    )
+    result = normalize_company_tickers_exchange(conn, landing_id)
+    assert result == ExchangeNormalizeResult(
+        issuers_created=1,
+        securities_created=1,
+        excluded_otc=0,
+        excluded_no_exchange=0,
+        excluded_unknown_venue=0,
+        skipped_blank_ticker=0,
+        skipped_duplicate_ticker=2,
+        missing_submissions=0,
+    )
+    assert resolve(conn, "AAPL", FETCHED_DATE) is None
+    assert resolve(conn, "IMPO", FETCHED_DATE) is not None
+
+
+def test_a_ticker_shared_with_an_excluded_row_is_not_a_duplicate(conn):
+    """Only included rows compete: an OTC twin never reaches `core`."""
+    _land_submissions(conn, {320193: ALL_FACTS[320193], 222: ("operating", "1", "x")})
+    landing_id = _land(
+        conn,
+        [
+            [320193, "Apple Inc.", "AAPL", "Nasdaq"],
+            [222, "Shell Co", "AAPL", "OTC"],
+        ],
+    )
+    result = normalize_company_tickers_exchange(conn, landing_id)
+    assert result == ExchangeNormalizeResult(
+        issuers_created=1,
+        securities_created=1,
+        excluded_otc=1,
+        excluded_no_exchange=0,
+        excluded_unknown_venue=0,
+        skipped_blank_ticker=0,
+        skipped_duplicate_ticker=0,
+        missing_submissions=0,
+    )
+    assert resolve(conn, "AAPL", FETCHED_DATE) is not None

@@ -59,6 +59,7 @@ def test_reports_tickers_only_the_file_knows(conn):
     _land_submissions(conn, 111, [])
     [found] = ticker_disagreements(conn, landing_id)
     assert found.only_in_exchange_file == ("SBC",)
+    assert found.only_in_submissions == ()
 
 
 def test_a_cik_with_no_submissions_row_is_not_a_disagreement(conn):

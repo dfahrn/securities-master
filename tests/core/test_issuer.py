@@ -87,6 +87,24 @@ def test_security_requires_an_issuer(conn):
         )
 
 
+def test_security_rejects_a_missing_issuer_id(conn):
+    """Pins issuer_id NOT NULL itself, distinct from the FK test above.
+
+    That test supplies an issuer_id that merely doesn't exist yet, which
+    exercises the foreign key. This omits the column entirely: the only
+    thing that can make `NOT NULL` legal here is the migration's TRUNCATE
+    running before the column was added.
+    """
+    with pytest.raises(IntegrityError):
+        conn.execute(
+            security.insert().values(
+                security_type="common_stock",
+                status="active",
+                first_seen_date=date(2026, 8, 19),
+            )
+        )
+
+
 def test_unknown_is_an_accepted_security_type(conn):
     issuer_id = _make_issuer(conn)
     conn.execute(

@@ -33,9 +33,11 @@ def upgrade() -> None:
         sa.UniqueConstraint("cik", "payload_hash", name="edgar_submissions_cik_hash_key"),
         schema="landing",
     )
-    # The fetch loop's run-scoped resume reads (cik, fetched_at) for every
-    # filer on every run; without this it seq-scans a table that grows by
-    # ~8,000 rows per run.
+    # Composite index on (cik, fetched_at), for per-filer history reads.
+    # NOTE: it does NOT serve the fetch loop's run-scoped resume query.
+    # `_landed_this_run` filters on `fetched_at` alone, and a btree cannot
+    # seek on a non-leading column, so that query seq-scanned regardless.
+    # Migration 0010 adds the single-column (fetched_at) index it needs.
     op.create_index(
         "edgar_submissions_cik_fetched_at",
         "edgar_submissions",

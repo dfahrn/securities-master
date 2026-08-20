@@ -1,3 +1,4 @@
+import uuid
 from datetime import date
 
 import pytest
@@ -8,13 +9,22 @@ from securities_master.core.identity import (
     identifiers_for,
     resolve,
 )
-from securities_master.core.tables import security, security_identifier
+from securities_master.core.tables import issuer, security, security_identifier
+
+
+def _make_issuer(conn) -> int:
+    return conn.execute(
+        issuer.insert()
+        .values(cik=uuid.uuid4().hex[:10], name="Test Issuer")
+        .returning(issuer.c.issuer_id)
+    ).scalar_one()
 
 
 def _security_with_ticker(conn, ticker, valid_from, valid_to) -> int:
     security_id = conn.execute(
         security.insert()
         .values(
+            issuer_id=_make_issuer(conn),
             security_type="common_stock",
             status="active",
             first_seen_date=valid_from,
@@ -77,15 +87,15 @@ def test_identifiers_for_returns_active_identifiers(conn):
     conn.execute(
         security_identifier.insert().values(
             security_id=sid,
-            id_type="cik",
-            id_value="0000320193",
+            id_type="cusip",
+            id_value="037833100",
             valid_from=date(2005, 1, 1),
             valid_to=None,
         )
     )
     assert identifiers_for(conn, sid, date(2020, 1, 1)) == {
         "ticker": "XYZ",
-        "cik": "0000320193",
+        "cusip": "037833100",
     }
 
 
@@ -100,13 +110,13 @@ def test_identifiers_for_excludes_an_expired_identifier(conn):
     conn.execute(
         security_identifier.insert().values(
             security_id=sid,
-            id_type="cik",
-            id_value="0000320193",
+            id_type="cusip",
+            id_value="037833100",
             valid_from=date(2005, 1, 1),
             valid_to=None,
         )
     )
-    assert identifiers_for(conn, sid, date(2020, 1, 1)) == {"cik": "0000320193"}
+    assert identifiers_for(conn, sid, date(2020, 1, 1)) == {"cusip": "037833100"}
 
 
 def test_identifiers_for_raises_on_duplicate_id_type(conn):

@@ -75,8 +75,14 @@ against the post-migration schema. P4 is unpinned for exactly one commit:
 `normalize/exchange.py`'s own
 `test_normalize_replays_identically_from_landing` (`tests/normalize/test_exchange.py`)
 re-pins it immediately against the new rebuild path — it lands core rows,
-deletes them, re-normalizes from the same `landing_id`, and asserts the
-`first_seen_date` values are identical the second time.
+deletes them, re-normalizes from the same `landing_id`, and asserts an
+ordered projection of every derived fact — `(cik, name, entity_type,
+sic_code, security_type, ticker, exchange_mic, valid_from)` across all four
+`core` tables — is identical the second time. Its first version compared
+`first_seen_date` alone, which is the same constant for every row: deleting
+the issuer-facts join, the MIC mapping, and every ticker write would not have
+moved it. A property claimed in three documents deserves an assertion that
+can tell a correct rebuild from an empty one with the right dates.
 
 What would have made this migration require a backfill instead of a
 truncate: anything in `core` that isn't a pure function of `landing` —
@@ -291,9 +297,11 @@ them.
 | Issuers whose submissions fetch failed carry NULL SEC facts and `unknown` securities — measured: 0 in this run | Phase 2a | Re-run `scripts/land_phase2a.py` |
 | Seeded ticker ranges start at the landing fetch date; earlier history unknown | Phase 1 | Phase 4 |
 | Only currently-listed companies are seeded | Phase 1 | Phase 4 |
-| Ticker rename on a known CIK leaves the stale range open; reassignment to a new CIK raises | Phase 1 | Phase 4 |
+| A ticker that moves between CIKs, or is renamed, is not tracked over time: each rebuild opens ranges at the current fetch date and closes none, because the shipped normalizer is rebuild-only and has no rename path | Phase 2a | Phase 4 |
+| `normalize_company_tickers_exchange` is REBUILD-ONLY: it always inserts, so a second run against a populated `core` raises `UniqueViolation` on `issuer.cik`. A re-seed must truncate first | Phase 2a | Phase 2b (incremental normalization) |
 | Blank-ticker rows create the security but no ticker identifier — measured: 0 in this run | Phase 1 | Phase 4 |
-| `core.exchange` seeded with four MICs (`XNYS`, `XNAS`, `BATS`, plus Phase 1's set less `ARCX`) | Phase 2a | Phase 2b |
+| `core.exchange` seeded with three MICs (`BATS`, `XNAS`, `XNYS`) — verified against the live table; Phase 1's `ARCX` was deleted by migration 0009 | Phase 2a | Phase 2b |
+| A ticker claimed by more than one included row is dropped for BOTH claimants and counted as `skipped_duplicate_ticker`; nothing in the file says which filer owns it — measured: 0 in this run | Phase 2a | Phase 3 |
 
 No claim above generalizes beyond what was actually measured this run: the
 missing-submissions and blank-ticker rows both happened to be `0` for this

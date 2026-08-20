@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import pytest
 from sqlalchemy import func, select
 
 from securities_master.ingest.edgar import EdgarAdapter
@@ -31,6 +32,32 @@ class _Sleeps:
 
     def __call__(self, seconds):
         self.calls.append(seconds)
+
+
+class _Clock:
+    """A fake monotonic clock that both sleeping and network latency advance.
+
+    Lets a test observe elapsed time per request without ever waiting.
+    """
+
+    def __init__(self, latency=0.0):
+        self.now = 0.0
+        self.latency = latency
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def handler(self, inner):
+        def handle(request):
+            self.now += self.latency
+            return inner(request)
+
+        return handle
 
 
 def test_lands_every_cik_once(conn):
@@ -127,12 +154,50 @@ def test_a_non_retryable_status_fails_immediately(conn):
     assert attempts["n"] == 1
 
 
-def test_rate_limit_sleeps_between_requests(conn):
-    sleeps = _Sleeps()
+def test_rate_limit_achieves_the_nominal_rate_despite_latency(conn):
+    """The pacing PROPERTY, not the sleep call that implements it.
+
+    The previous version of this test asserted `sleep(0.25)` twice, which is
+    the mechanism — and the mechanism was wrong: sleeping a fixed interval
+    *after* each fetch made the real period `interval + latency`, so a
+    nominal 8 req/s ran at 3.2 and a 17-minute crawl took 41. That defect
+    passed the old assertion perfectly. What matters is elapsed time per
+    request, so that is what is asserted here.
+    """
+    clock = _Clock(latency=0.2)
     land_submissions(
-        conn, _adapter(_ok()), CIKS, RUN_ONE, requests_per_second=4.0, sleep=sleeps
+        conn,
+        _adapter(clock.handler(_ok())),
+        CIKS,
+        RUN_ONE,
+        requests_per_second=4.0,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
     )
-    assert sleeps.calls.count(0.25) == 2
+    # Two requests at 4/s must consume 2 * 0.25s, not 2 * (0.25 + 0.2).
+    assert clock.now == pytest.approx(0.5)
+
+
+def test_rate_limit_never_outruns_the_nominal_rate(conn):
+    """Latency above the interval slows the loop down; it never banks credit.
+
+    A deadline that accumulated a deficit while upstream was slow would
+    repay it as a burst of unpaced requests the moment upstream sped up —
+    over SEC's limit, exactly when SEC is least happy about it.
+    """
+    clock = _Clock(latency=0.4)
+    land_submissions(
+        conn,
+        _adapter(clock.handler(_ok())),
+        CIKS,
+        RUN_ONE,
+        requests_per_second=4.0,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    # Latency-bound: 2 * 0.4s, never faster, and no negative sleep issued.
+    assert clock.now == pytest.approx(0.8)
+    assert all(seconds >= 0 for seconds in clock.slept)
 
 
 def test_retries_a_transport_error_then_succeeds(conn):

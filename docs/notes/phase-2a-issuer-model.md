@@ -82,9 +82,10 @@ What would have made this migration require a backfill instead of a
 truncate: anything in `core` that isn't a pure function of `landing` —
 manually corrected rows, external annotations, or (starting in Phase 2b)
 downstream tables like daily bars that reference `security_id` by value.
-`0009`'s own design note calls this out: "nothing depends on `security_id`
-yet; after Phase 2b lands bars, nothing like this is free again." This is
-the last phase in this project that gets to truncate-and-rebuild for free.
+The design spec (§4, D6) names this directly: "nothing depends on
+`security_id` yet; after Phase 2b lands bars, nothing like this is free
+again." This is the last phase in this project that gets to
+truncate-and-rebuild for free.
 
 ## Why OTC and null-venue rows are excluded, and what was actually excluded
 
@@ -236,17 +237,43 @@ Normalized landing row 1:
 ```
 
 Verified independently against `core` after the run: `6,072` issuers,
-`7,696` securities, `7,696` ticker identifiers, `7,696` listings (one each —
-every included row produces exactly one of each), `893` issuers own more
-than one security (Alphabet among them, with four), `5,962` securities
-`common_stock`, `1,734` `unknown`.
+`7,696` securities, `7,696` ticker identifiers, `7,696` listings. On this
+run, every included row produced exactly one security, one listing, and one
+ticker identifier — but that 1:1:1 shape is a fact about this payload, not a
+guarantee of the normalizer: `skipped_blank_ticker` was `0` here, and the
+code path exists (`normalize/exchange.py`) for a row with a blank ticker to
+create its `security` and `security_listing` rows with no matching
+`security_identifier` at all, which would break the count-for-count parity
+without touching `securities_created` or `listings`. `893` issuers own more
+than one security (Alphabet among them, with four); `5,962` securities are
+`common_stock`, `1,734` are `unknown`.
 
-`resolve()` and `issuer_for()` confirm the case this phase exists for:
-`GOOGL` and `GOOG` resolve to different `security_id`s (`3` and `6026`)
-under the same issuer, `Alphabet Inc.`; `BRK-A` and `BRK-B` resolve to
-different `security_id`s (`6028` and `10`) under the same issuer,
-`BERKSHIRE HATHAWAY INC`. All four were unresolvable or wrong under Phase
-1's one-security-per-CIK schema.
+`resolve()` and `issuer_for()` confirm the case this phase exists for —
+**using `as_of = date(2026, 8, 20)`, the UTC date the landing row was
+fetched, not `date.today()`**: `GOOGL` and `GOOG` resolve to different
+`security_id`s (`3` and `6026`) under the same issuer, `Alphabet Inc.`;
+`BRK-A` and `BRK-B` resolve to different `security_id`s (`6028` and `10`)
+under the same issuer, `BERKSHIRE HATHAWAY INC`. All four were unresolvable
+or wrong under Phase 1's one-security-per-CIK schema.
+
+**The `date.today()` trap.** `as_of` for every identifier this run wrote
+comes from `fetched_at.date()`, and `fetched_at` is stored as a UTC-aware
+timestamp — so `valid_from` for every ticker and listing seeded this run is
+the **UTC** calendar date of the fetch, `2026-08-20`. `date.today()` returns
+the **local** calendar date. On the host this re-seed ran on, local time was
+still `2026-08-19` when UTC had already rolled over to `2026-08-20` —
+several hours of the day where the two dates disagree. Calling
+`resolve(conn, "GOOGL", date.today())` during that window returns `None`,
+and not just for GOOGL: every one of GOOGL, GOOG, GOOGM, BRK-A, BRK-B, SPY,
+and AAPL comes back unresolved, because `_valid_on()`'s `valid_from <= as_of`
+rejects all of them at once. This is `resolve()` doing exactly what it's
+built to do — refuse to vouch for a date it has no data for — but a reader
+who runs the snippet above with `date.today()` in place of the explicit date,
+at the wrong hour, will see seven `None`s and reasonably suspect the re-seed
+failed rather than suspect the clock. Research code that calls `resolve()`
+against freshly-seeded data should anchor `as_of` to UTC
+(`datetime.now(timezone.utc).date()`), not to local `date.today()`, for
+exactly this reason.
 
 ## The Approximation Ledger, updated
 

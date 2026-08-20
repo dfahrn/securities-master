@@ -75,9 +75,25 @@ def land_submissions(
     """Fetch and land one submissions payload per CIK.
 
     Rate limited to `requests_per_second` against SEC's stated limit of 10 —
-    headroom rather than optimism. Resumable: a killed run restarts and
-    continues. A CIK that exhausts its retries is recorded and counted, never
-    fatal, so one bad filer cannot cost 8,000 good fetches.
+    headroom rather than optimism. A CIK that fails outright, or that
+    exhausts its retries, is recorded and counted, never fatal — one bad
+    filer or one malformed response cannot cost 8,000 good fetches.
+
+    Resumability is scoped to rows this run actually inserted, not to CIKs
+    it merely observed. A killed run restarts and skips every CIK whose
+    payload was landed (a new row) before the kill; a CIK whose payload was
+    observed *unchanged* leaves no durable trace and will be re-fetched on
+    restart, because the unchanged path writes no row and there is no
+    `last_seen_at` column to record the observation (deferred to Phase 5 —
+    see `test_an_unchanged_observation_leaves_no_durable_resume_state`).
+
+    Transaction discipline is the caller's responsibility: this function
+    does not commit. The resume property above only holds if the caller
+    commits incrementally (e.g. per batch), so that inserted rows survive a
+    kill. A caller that wraps an entire multi-thousand-CIK run in one
+    uncommitted transaction gets no resumability at all — a kill loses
+    everything back to the start, silently, because nothing was ever
+    durable enough for `_landed_this_run` to see on restart.
     """
     done = _landed_this_run(conn, run_started)
     interval = 1.0 / requests_per_second
@@ -92,7 +108,13 @@ def land_submissions(
 
         try:
             payload = _fetch_with_retry(adapter, cik, max_attempts, sleep)
-        except httpx.HTTPError:
+        except Exception:
+            # Deliberately broad: an HTTP error, a malformed 200 (e.g. SEC's
+            # HTML block/maintenance page, which raises json.JSONDecodeError
+            # out of response.json() with no HTTP-level signal at all), or
+            # any other per-CIK failure must be counted, never allowed to
+            # abort the run. KeyboardInterrupt/SystemExit are BaseException,
+            # not Exception, so they still propagate.
             failed += 1
             failures.append(cik)
             sleep(interval)

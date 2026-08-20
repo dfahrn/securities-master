@@ -2224,10 +2224,10 @@ Updated by Task 9 Step 8 with measured figures. Entries carried forward from Pha
 | ~~One security per CIK; 2,401 tickers (23%) unrepresented~~ | Phase 1 | **CLOSED — Phase 2a** |
 | ~~Retained share class is vendor-file order (BRK-B kept, BRK-A dropped)~~ | Phase 1 | **CLOSED — Phase 2a** |
 | `security_type` is `common_stock` only for `entityType == 'operating'`; every other filer is `unknown`, because SEC's `entityType` cannot separate a fund from an ADR | Phase 2a | Phase 5 (richer vendor) |
-| OTC and null-venue rows excluded — *(record measured counts here)* | Phase 2a | Revisit if research needs OTC coverage |
+| OTC and null-venue rows excluded — measured: 2,502 OTC + 189 null-venue = 2,691 of 10,387 rows | Phase 2a | Revisit if research needs OTC coverage |
 | NYSE American cannot be distinguished from NYSE; the file has no such column | Phase 2a | Phase 4 |
-| SEC's submissions and ticker file disagree on some filers' tickers — *(record the count here)*; normalization reads the exchange file only | Phase 2a | Phase 3 |
-| Issuers whose submissions fetch failed carry NULL SEC facts and `unknown` securities — *(record the count here)* | Phase 2a | Re-run `scripts/land_phase2a.py` |
+| SEC's submissions and ticker file disagree on some filers' tickers — measured: 646 CIKs; normalization reads the exchange file only | Phase 2a | Phase 3 |
+| Issuers whose submissions fetch failed carry NULL SEC facts and `unknown` securities — measured: 0 in this run | Phase 2a | Re-run `scripts/land_phase2a.py` |
 | Seeded ticker ranges start at the landing fetch date; earlier history unknown | Phase 1 | Phase 4 |
 | Only currently-listed companies are seeded | Phase 1 | Phase 4 |
 | Ticker rename on a known CIK leaves the stale range open; reassignment to a new CIK raises | Phase 1 | Phase 4 |

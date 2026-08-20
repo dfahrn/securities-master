@@ -2230,16 +2230,18 @@ Updated by Task 9 Step 8 with measured figures. Entries carried forward from Pha
 | Issuers whose submissions fetch failed carry NULL SEC facts and `unknown` securities — measured: 0 in this run | Phase 2a | Re-run `scripts/land_phase2a.py` |
 | Seeded ticker ranges start at the landing fetch date; earlier history unknown | Phase 1 | Phase 4 |
 | Only currently-listed companies are seeded | Phase 1 | Phase 4 |
-| Ticker rename on a known CIK leaves the stale range open; reassignment to a new CIK raises | Phase 1 | Phase 4 |
+| A ticker that moves between CIKs, or is renamed, is not tracked over time: each rebuild opens ranges at the current fetch date and closes none, because the shipped normalizer is rebuild-only and has no rename path | Phase 2a | Phase 4 |
+| `normalize_company_tickers_exchange` is REBUILD-ONLY: it always inserts, so a second run against a populated `core` raises `UniqueViolation` on `issuer.cik`. A re-seed must truncate first | Phase 2a | Phase 2b (incremental normalization) |
 | Blank-ticker rows create the security but no ticker identifier | Phase 1 | Phase 4 |
-| `core.exchange` seeded with four MICs (`XNYS`, `XNAS`, `BATS`, plus Phase 1's set less `ARCX`) | Phase 2a | Phase 2b |
+| `core.exchange` seeded with three MICs (`BATS`, `XNAS`, `XNYS`) — verified against the live table; Phase 1's `ARCX` was deleted by migration 0009 | Phase 2a | Phase 2b |
+| A ticker claimed by more than one included row is dropped for BOTH claimants and counted as `skipped_duplicate_ticker`; nothing in the file says which filer owns it — measured: 0 in this run | Phase 2a | Phase 3 |
 
 ---
 
 ## Phase Exit Criteria
 
 - `make up && make migrate && make test` succeeds from a clean checkout
-- Both databases report revision `0009`
+- Both databases report revision `0010` (`0009` as planned, plus `0010` from the post-review fix wave: the `security_listing` temporal exclusion constraint and the `landing.edgar_submissions(fetched_at)` index)
 - `resolve("GOOGL", today)` and `resolve("GOOG", today)` both return ids, and the ids differ
 - `issuer_for()` returns the same issuer for both
 - Every count printed by `seed-phase2a` is recorded in the learning note and the ledger

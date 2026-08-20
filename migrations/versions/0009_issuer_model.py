@@ -3,8 +3,11 @@
 Revision ID: 0009
 Revises: 0008
 
-DESTRUCTIVE. This truncates every core table and relies on the rebuild
-reading from `landing`. That is safe for exactly one reason: principle P4
+DESTRUCTIVE. This truncates the three derived core tables —
+`security_identifier`, `security_listing`, `security` — and relies on the
+rebuild reading from `landing`. (`core.exchange` is not truncated: it is
+reference data, edited here by a targeted INSERT of `BATS` and DELETE of
+`ARCX`.) That is safe for exactly one reason: principle P4
 (`core` is fully derivable from `landing`). Up to this commit, P4 was pinned
 by `test_normalize_replays_identically_from_landing` in
 tests/normalize/test_edgar.py; this same commit retires that test alongside

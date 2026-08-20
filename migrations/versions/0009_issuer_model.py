@@ -5,9 +5,15 @@ Revises: 0008
 
 DESTRUCTIVE. This truncates every core table and relies on the rebuild
 reading from `landing`. That is safe for exactly one reason: principle P4
-(`core` is fully derivable from `landing`), pinned by the replay test in
-tests/normalize/test_edgar.py. The downgrade is LOSSY — it restores the
-schema but not the data; re-run normalization afterwards.
+(`core` is fully derivable from `landing`). Up to this commit, P4 was pinned
+by `test_normalize_replays_identically_from_landing` in
+tests/normalize/test_edgar.py; this same commit retires that test alongside
+the module it covered, because `issuer_id NOT NULL` and the narrowed
+identifier CHECK make that normalizer's inserts illegal. The property goes
+unpinned for exactly one commit: the exchange normalizer carries its own
+`test_normalize_replays_identically_from_landing` against the new rebuild
+path, re-pinning P4 there. The downgrade is LOSSY — it restores the schema
+but not the data; re-run normalization afterwards.
 """
 
 import sqlalchemy as sa

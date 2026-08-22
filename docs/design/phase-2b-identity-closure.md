@@ -96,6 +96,14 @@ later without a single re-fetch. A `core` column for it now would be YAGNI.
 units, and rights stay in `core` with `security_type = 'other'`. Research code
 filters on type; nothing is silently discarded, and the counts are reported.
 
+**D6a — a FIGI collision is counted and falls back, never raised.** `natural_key`
+is `UNIQUE`, so two securities resolving to the same FIGI would abort the
+rebuild. Where a FIGI is already claimed by an earlier row, the later security
+takes the composite fallback instead and the collision is counted in
+`figi_collisions`. One vendor oddity must not cost the whole 7,696-row rebuild —
+the same failure-isolation rule the fetch loop and the duplicate-ticker guard
+already follow.
+
 **D6 — `other` and `unknown` are different facts.** `other` means *we know what
 this is and it is not cash equity*. `unknown` means *we could not find out*.
 Collapsing them discards what OpenFIGI bought.
@@ -201,26 +209,40 @@ row, in addition to Phase 2a's behaviour:
 4. `security_type` = derived per §5.2
 5. insert a `figi` identifier row when mapped
 
-`ExchangeNormalizeResult` gains `figi_mapped`, `figi_unmapped`, and a count per
-derived `security_type`.
+`ExchangeNormalizeResult` gains `figi_mapped`, `figi_unmapped`, `figi_collisions`,
+and a count per derived `security_type`.
 
-**Expected outcome:** roughly 7,155 securities mapped and ~541 unmapped, with
-`unknown` falling from 1,734 to approximately the unmapped count, and the
-remainder distributed across `common_stock`, `etf`, `adr`, and `other`. The
-exact figures are whatever the run reports and are not predicted here.
+**Expected shape:** the 7,155 plain-alphanumeric tickers should map at a rate
+near the 10/10 measured on a control sample, and the 541 dashed ones near the
+0/10 measured on a dashed sample. `unknown` should therefore fall from 1,734 to
+roughly the unmapped count, with the remainder distributed across
+`common_stock`, `etf`, `adr`, and `other`. These are extrapolations from a
+twenty-ticker probe, not predictions — the run's actual figures go in the
+ledger, and a material divergence from this shape is a finding to report rather
+than a number to accept.
 
-## 8. Migration
+## 8. Migrations
 
-Migration `0011`, in order:
+Two revisions, split so the ordering constraint in §11 is structural rather
+than procedural — exactly as `0008`/`0009` were in Phase 2a.
+
+**`0011` (additive)** creates `landing.openfigi_mapping`. It runs before the
+mapping fetch.
+
+**`0012` (destructive)** runs only after the mappings are landed, in order:
 
 1. `TRUNCATE core.security_identifier, core.security_listing, core.security,
-   core.issuer RESTART IDENTITY CASCADE`
+   core.issuer RESTART IDENTITY CASCADE` — `core.issuer` is included because the
+   normalizer creates issuers as well as securities, and leaving them in place
+   would make every `issuer.insert()` collide on the `cik` UNIQUE constraint.
+   Issuer content is unchanged by this phase; only its surrogate ids are
+   reassigned.
 2. `ALTER TABLE core.security ADD COLUMN natural_key text NOT NULL UNIQUE`
 3. `ALTER TABLE core.security ADD COLUMN figi_security_type text NULL`
 4. Replace the `security_type` CHECK with the five-value form
 
 `NOT NULL` without a default is possible only because step 1 emptied the table,
-exactly as in `0009`. The migration is destructive and safe for one reason: P4,
+exactly as in `0009`. `0012` is destructive and safe for one reason: P4,
 pinned by the replay test in `tests/normalize/test_exchange.py`. The downgrade
 is lossy — it restores the schema, not the data — and must say so.
 
@@ -236,6 +258,8 @@ re-mapping pass rather than nothing.
   replay test structurally could not observe
 - the `security_type` derivation asserted as a whole mapping, not entry by entry
 - an unmapped security gets no `figi` identifier row
+- two securities resolving to one FIGI: the second takes the fallback key and
+  the collision is counted, rather than the rebuild aborting
 - a `warning` response is counted as unmapped, not as a failure
 - the fetch loop run twice, pinning the run-scoped resume
 - **every collection literal introduced gets one assertion of the same
@@ -258,11 +282,11 @@ re-mapping pass rather than nothing.
 
 | Step | Content | Done when |
 |---|---|---|
-| 1 | `landing.openfigi_mapping` + migration `0011a` (additive) | Table exists on both databases; re-landing unchanged data is a no-op |
+| 1 | `landing.openfigi_mapping` + migration `0011` (additive) | Table exists on both databases; re-landing unchanged data is a no-op |
 | 2 | OpenFIGI adapter | Mapping parsed from a mocked batch; warnings distinguished from errors |
 | 3 | Batched fetch loop | Survives interruption; a second run refetches; failures record all ten tickers |
 | 4 | Real mapping run (~31 min) | All 7,696 tickers attempted; mapped and unmapped counts recorded |
-| 5 | Migration `0011b` (destructive) | Both databases migrated; `core` empty |
+| 5 | Migration `0012` (destructive) | Both databases migrated; `core` empty |
 | 6 | Normalizer changes | Natural keys assigned; derivation correct; counters reported |
 | 7 | Re-seed, design note, ledger update | Counts match §7; `natural_key` stable across a replay |
 
